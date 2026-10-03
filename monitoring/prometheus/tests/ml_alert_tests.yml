@@ -1,0 +1,154 @@
+# Unit tests for the three ML rules that alert_tests.yml does not cover:
+# DecisionMixShift, PredictionErrorsRising and ExplanationLatencyHigh.
+#
+# Same shape as alert_tests.yml: every rule gets one case where it must fire
+# and one where it must NOT. A rule that is only ever tested firing is a rule
+# that will page for nothing, and then somebody silences it.
+#
+# Run:
+#     cd monitoring/prometheus/tests && promtool test rules ml_alert_tests.yml
+
+rule_files:
+  - ../alerts/ml_alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+  # ===========================================================================
+  - interval: 1m
+    name: A normal decision mix never fires, however busy the service is
+    input_series:
+      # 1000 decisions/min, 8% DECLINE: the training-like baseline.
+      - series: 'ml_decisions_total{decision="APPROVE", model_version="1.0.0"}'
+        values: "0+780x90"
+      - series: 'ml_decisions_total{decision="REVIEW", model_version="1.0.0"}'
+        values: "0+140x90"
+      - series: 'ml_decisions_total{decision="DECLINE", model_version="1.0.0"}'
+        values: "0+80x90"
+    alert_rule_test:
+      - eval_time: 80m
+        alertname: DecisionMixShift
+        exp_alerts: []
+
+  - interval: 1m
+    name: A quiet service whose DECLINE share triples fires after 30 minutes
+    input_series:
+      # Only 10 decisions/min, but 3 of them DECLINE: 30%. A count-based rule
+      # would never notice at this volume; the ratio does.
+      - series: 'ml_decisions_total{decision="APPROVE", model_version="1.0.0"}'
+        values: "0+6x60"
+      - series: 'ml_decisions_total{decision="REVIEW", model_version="1.0.0"}'
+        values: "0+1x60"
+      - series: 'ml_decisions_total{decision="DECLINE", model_version="1.0.0"}'
+        values: "0+3x60"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: DecisionMixShift
+        exp_alerts: []          # above 20% since t=1m, `for: 30m` not elapsed
+      - eval_time: 40m
+        alertname: DecisionMixShift
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              signal: output
+            exp_annotations:
+              summary: "DECLINE share is 30% of decisions (baseline about 8%)"
+              description: >-
+                The model is declining a much larger share of applicants than it
+                did on training-like traffic. This is the business-visible
+                consequence and usually lags input drift: check
+                ml_feature_drift_psi first. If drift is low, check whether a
+                threshold or the model version changed (ml_model_info). Tell the
+                underwriting team before the manual-review queue and complaints
+                show it.
+
+  # ===========================================================================
+  - interval: 1m
+    name: An occasional model error does not page anyone
+    input_series:
+      # 3 failures/min = 0.05/s, under the 0.1/s floor.
+      - series: 'ml_prediction_errors_total{error_type="ValueError", model_version="1.0.0"}'
+        values: "0+3x40"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: PredictionErrorsRising
+        exp_alerts: []
+
+  - interval: 1m
+    name: Sustained model failures are critical after five minutes
+    input_series:
+      # 12 failures/min = 0.2/s, across two error types that the rule sums.
+      - series: 'ml_prediction_errors_total{error_type="ValueError", model_version="1.0.0"}'
+        values: "0+9x20"
+      - series: 'ml_prediction_errors_total{error_type="KeyError", model_version="1.0.0"}'
+        values: "0+3x20"
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: PredictionErrorsRising
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: PredictionErrorsRising
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              signal: service
+            exp_annotations:
+              summary: "Model calls are failing at 0.20/s"
+              description: >-
+                Failures inside the model call, not in HTTP routing. Group
+                ml_prediction_errors_total by error_type: a ValueError or KeyError
+                after a deploy usually means the request schema and the model's
+                expected columns no longer agree; a MemoryError points at the
+                container. Roll back to the last good model version if it started
+                with a release.
+
+  # ===========================================================================
+  - interval: 1m
+    name: Fast explanations never fire
+    input_series:
+      # 10 explanations/min, all under 50 ms.
+      - series: 'ml_explain_duration_seconds_bucket{le="0.05"}'
+        values: "0+10x40"
+      - series: 'ml_explain_duration_seconds_bucket{le="1.0"}'
+        values: "0+10x40"
+      - series: 'ml_explain_duration_seconds_bucket{le="2.5"}'
+        values: "0+10x40"
+      - series: 'ml_explain_duration_seconds_bucket{le="+Inf"}'
+        values: "0+10x40"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: ExplanationLatencyHigh
+        exp_alerts: []
+
+  - interval: 1m
+    name: Slow explanations fire after ten minutes
+    input_series:
+      # Every explanation lands between 1.0 s and 2.5 s, so p95 is
+      # interpolated to 1.0 + 0.95 * 1.5 = 2.425 s.
+      - series: 'ml_explain_duration_seconds_bucket{le="0.05"}'
+        values: "0+0x40"
+      - series: 'ml_explain_duration_seconds_bucket{le="1.0"}'
+        values: "0+0x40"
+      - series: 'ml_explain_duration_seconds_bucket{le="2.5"}'
+        values: "0+10x40"
+      - series: 'ml_explain_duration_seconds_bucket{le="+Inf"}'
+        values: "0+10x40"
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: ExplanationLatencyHigh
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: ExplanationLatencyHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              signal: service
+            exp_annotations:
+              summary: "p95 explanation latency is 2.425s"
+              description: >-
+                SHAP explanations are slower than one second at p95. Predictions
+                are unaffected, but adverse-action notices and underwriter screens
+                wait on this. Check whether explanation volume rose
+                (ml_explanations_total), whether the model grew (more trees means
+                slower TreeExplainer), and the host CPU on the Service Health
+                dashboard before scaling.
