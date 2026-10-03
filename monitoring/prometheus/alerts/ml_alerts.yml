@@ -1,0 +1,54 @@
+# TASK 12 — model-level alert rules.
+#
+# api_alerts.yml is the worked example: read it first. Every rule there has
+#   - an `expr` that means the same thing at 10 rps and at 1000 rps,
+#   - a `for:` longer than one scrape, so a single bad sample cannot page you,
+#   - a `severity` label,
+#   - a `summary` saying what is wrong and a `description` saying what to do
+#     about it. An alert whose recipient has to reverse-engineer the intent at
+#     3am is an alert that gets ignored by the second week.
+#
+# These rules are different in kind from the ones in api_alerts.yml: none of
+# them proves the model is wrong. Each is a reason to LOOK.
+#
+# Write the seven rules below. tests/test_config_files.py checks the structure;
+# monitoring/prometheus/tests/alert_tests.yml checks the behaviour, and you can
+# run it before you have a Prometheus instance at all:
+#
+#     cd monitoring/prometheus/tests && promtool test rules alert_tests.yml
+#
+# The metric names you need are all in app/metrics.py.
+
+groups:
+  - name: ml_drift
+    rules: []
+      # TODO: ModerateFeatureDrift
+      #   ml_drift_score above the conventional 0.10 band for 15m, warning.
+      #   Include labels severity=warning and signal=leading.
+      #   The summary should print the value: {{ $value | printf "%.3f" }}
+
+      # TODO: SignificantFeatureDrift
+      #   The same metric above 0.25 for 15m, critical, signal=leading.
+
+      # TODO: DriftWindowTooSmall
+      #   ml_drift_window_size below 200 for 30m, severity info.
+      #   This exists so that "drift is fine" is never inferred from "drift
+      #   is not being measured".
+
+  - name: ml_behaviour
+    rules: []
+      # TODO: DecisionMixShift
+      #   The DECLINE share of ml_decisions_total over 30m, above 20%, for 30m.
+      #   Use a ratio of rates, not a raw count. Baseline here is about 8%.
+
+      # TODO: FairnessGapWidened
+      #   ml_fairness_gap above 0.10 for 20m, critical, signal=fairness.
+      #   Aggregate drift and aggregate score can both look healthy while
+      #   this one moves — which is the whole reason it is a separate metric.
+
+      # TODO: PredictionErrorsRising
+      #   rate of ml_prediction_errors_total above 0.1/s for 5m, critical.
+      #   Distinct from HTTP 5xx: these are failures inside the model call.
+
+      # TODO: ExplanationLatencyHigh
+      #   p95 of ml_explain_duration_seconds above 1s for 10m, warning.

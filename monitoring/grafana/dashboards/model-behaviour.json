@@ -1,0 +1,148 @@
+{
+  "__inputs": [],
+  "__requires": [],
+  "uid": "ddm501-model",
+  "title": "DDM501 \u2014 Model Behaviour",
+  "description": "TASK 13 \u2014 build this dashboard. service-health.json is the worked example; one panel is left here as a model. Add: PSI per feature, the score distribution as quantiles over ml_prediction_score_bucket, the decision mix, selection rate by group, the fairness gap, explanation latency, and prediction errors by type. Grafana can export a dashboard you build in the UI as JSON \u2014 but it must be saved into this file, because a dashboard configured by clicking exists only in one person's container.",
+  "tags": [
+    "ddm501",
+    "lab04",
+    "model"
+  ],
+  "timezone": "browser",
+  "editable": true,
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "time": {
+    "from": "now-30m",
+    "to": "now"
+  },
+  "templating": {
+    "list": []
+  },
+  "annotations": {
+    "list": []
+  },
+  "panels": [
+    {
+      "type": "row",
+      "title": "Is the model still looking at the same world?",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 1
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "stat",
+      "title": "Drift score (max PSI)",
+      "description": "Conventional PSI bands: <0.10 stable, 0.10-0.25 moderate, >=0.25 significant. Measured against the TRAINING distribution, frozen at build time \u2014 never against recent traffic, which would make slow drift invisible.",
+      "gridPos": {
+        "x": 0,
+        "y": 1,
+        "w": 5,
+        "h": 5
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-ddm501"
+      },
+      "targets": [
+        {
+          "expr": "ml_drift_score",
+          "legendFormat": "PSI",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-ddm501"
+          },
+          "instant": true
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "background",
+        "graphMode": "area"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.1
+              },
+              {
+                "color": "red",
+                "value": 0.25
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "row",
+      "title": "Input drift",
+      "gridPos": {
+        "x": 0,
+        "y": 6,
+        "w": 24,
+        "h": 1
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "row",
+      "title": "What the model is saying",
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 24,
+        "h": 1
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "row",
+      "title": "Fairness",
+      "gridPos": {
+        "x": 0,
+        "y": 25,
+        "w": 24,
+        "h": 1
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "row",
+      "title": "Cost of explaining",
+      "gridPos": {
+        "x": 0,
+        "y": 34,
+        "w": 24,
+        "h": 1
+      },
+      "collapsed": false,
+      "panels": []
+    }
+  ]
+}

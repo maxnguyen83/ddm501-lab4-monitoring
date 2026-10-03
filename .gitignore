@@ -1,0 +1,22 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+
+# Model artifacts are build output, not source. The one exception is the drift
+# reference: it is a property of the trained model and must ship with it, so
+# it is committed deliberately.
+models/*.joblib
+!models/reference.json
+data/*.csv
+
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+.mypy_cache/
+
+.DS_Store
+.idea/
+.vscode/
