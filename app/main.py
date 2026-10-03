@@ -43,7 +43,6 @@ from app.metrics import (
 from app.middleware import MetricsMiddleware
 from app.model import CreditRiskModel
 from app.monitoring import MonitoringWindow, ReferenceDistribution
-from pipeline.preprocessing import add_derived_features
 from app.schemas import (
     BatchPredictionRequest,
     BatchPredictionResponse,
@@ -53,6 +52,8 @@ from app.schemas import (
     MonitoringResponse,
     PredictionResponse,
 )
+from pipeline.config import SENSITIVE_ATTRIBUTE
+from pipeline.preprocessing import add_derived_features
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -145,8 +146,20 @@ def _observe(frame, scores, results) -> None:
     monitoring independent of the model's internals: a model swap must not
     silently stop populating the drift metrics.
     """
-    # TODO: implement
-    raise NotImplementedError
+    # The trap: derive BEFORE recording, or three of the six monitored
+    # features reach the window as None.
+    enriched = add_derived_features(frame)
+    rows = enriched.to_dict("records")
+
+    for row, score, result in zip(rows, scores, results):
+        score = float(score)
+        PREDICTION_SCORE.labels(model_version=MODEL_VERSION).observe(score)
+        DECISION_COUNT.labels(
+            decision=result["decision"], model_version=MODEL_VERSION
+        ).inc()
+        window.record(row, score, row.get(SENSITIVE_ATTRIBUTE))
+
+    PREDICTION_COUNT.labels(model_version=MODEL_VERSION).inc(len(results))
 
 
 # =============================================================================
@@ -175,8 +188,14 @@ async def metrics():
     put an O(window) cost on the hot path. Prometheus scrapes every 10s, which
     is a perfectly good refresh rate for a signal that moves over hours.
     """
-    # TODO: implement
-    raise NotImplementedError
+    try:
+        window.publish()
+    except Exception as exc:  # noqa: BLE001
+        # A bug in the drift code must not fail the scrape: Prometheus would
+        # read that as the whole service being down and page ServiceDown.
+        # The gauges keep their last values and the error is in the log.
+        logger.error("Failed to refresh monitoring gauges: %s", exc)
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 @app.get("/monitoring", response_model=MonitoringResponse, tags=["Monitoring"])
@@ -185,8 +204,7 @@ async def monitoring():
 
     TASK 7. One line: return MonitoringResponse(**window.publish()).
     """
-    # TODO: implement
-    raise NotImplementedError
+    return MonitoringResponse(**window.publish())
 
 
 # =============================================================================
@@ -253,8 +271,40 @@ async def explain(application: CreditApplication):
         /predict says for the same applicant.
       - On failure, count it on PREDICTION_ERRORS and raise a 500.
     """
-    # TODO: implement
-    raise NotImplementedError
+    active = _require_model()
+    if explainer is None:
+        raise HTTPException(status_code=503, detail="Explainer not available")
+
+    payload = application.model_dump()
+    try:
+        # Score with the same call /predict uses, so the probability and the
+        # decision quoted here cannot disagree with the ones the applicant got.
+        result = active.score(payload)
+        frame = active.to_frame([payload])
+
+        start = time.perf_counter()
+        explanation = explainer.explain(frame)
+        EXPLAIN_LATENCY.observe(time.perf_counter() - start)
+        EXPLAIN_COUNT.inc()
+
+        return ExplanationResponse(
+            default_probability=result["default_probability"],
+            decision=result["decision"],
+            base_value=explanation["base_value"],
+            contributions=explanation["contributions"],
+            model_version=MODEL_VERSION,
+            note=(
+                "Contributions are SHAP values in log-odds, largest first. A "
+                "positive value pushed this score towards default. They explain "
+                "what the model did, not whether the applicant will default."
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001
+        PREDICTION_ERRORS.labels(
+            error_type=type(exc).__name__, model_version=MODEL_VERSION
+        ).inc()
+        logger.error("Explanation error: %s", exc)
+        raise HTTPException(status_code=500, detail="Explanation failed") from exc
 
 
 # =============================================================================
