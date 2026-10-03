@@ -1,0 +1,19 @@
+# The image only needs app/, pipeline/, scripts/, models/ and requirements.txt
+# (see the COPY lines in the Dockerfile). Everything else is build context the
+# daemon would upload for nothing — a local .venv alone is several hundred MB.
+.venv/
+venv/
+.git/
+.github/
+data/
+docs/
+tests/
+monitoring/
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+.env
