@@ -8,6 +8,10 @@ on:
 
 env:
   PYTHON_VERSION: "3.11"
+  # scripts/*.py import the `pipeline` and `app` packages from the repo root.
+  # `python scripts/x.py` puts scripts/ on sys.path, not the root, so without
+  # this the first script step fails with ModuleNotFoundError.
+  PYTHONPATH: ${{ github.workspace }}
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -33,7 +37,7 @@ jobs:
         # which alerts fire and when. This is the step that catches a `for:`
         # window that can never elapse.
         working-directory: monitoring/prometheus/tests
-        run: promtool test rules alert_tests.yml
+        run: promtool test rules alert_tests.yml ml_alert_tests.yml
 
       - name: Check the compose file
         run: docker compose config --quiet
