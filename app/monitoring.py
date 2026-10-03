@@ -76,6 +76,11 @@ MONITORED_FEATURES = [
 # drift and is really just a small sample.
 EPSILON = 1e-4
 
+# Smallest group a selection rate is reported for. With 30 rows one extra
+# flagged applicant moves the rate by over three points; below that the
+# "gap" is mostly sampling noise.
+MIN_GROUP_SIZE = 30
+
 
 class ReferenceDistribution:
     """The training-time distribution every live window is compared against.
@@ -123,8 +128,22 @@ def population_stability_index(
     Check yourself: PSI of a distribution against itself must be 0, and PSI
     must never be negative. tests/test_monitoring.py asserts both.
     """
-    # TODO: implement
-    raise NotImplementedError
+    values = np.asarray(actual, dtype=float)
+    if values.size == 0:
+        return 0.0
+
+    counts, _ = np.histogram(values, bins=np.asarray(bin_edges, dtype=float))
+    total = counts.sum()
+    if total == 0:
+        # Every value was NaN, so nothing landed in a bin. Same answer as an
+        # empty window: no evidence of drift, which is not the same as stable.
+        return 0.0
+
+    # Floor both sides: a bucket that is empty in either distribution would
+    # otherwise contribute log(0) and turn the whole score into infinity.
+    live = np.maximum(counts / total, EPSILON)
+    reference = np.maximum(np.asarray(expected, dtype=float), EPSILON)
+    return float(np.sum((live - reference) * np.log(live / reference)))
 
 
 class MonitoringWindow:
@@ -187,8 +206,19 @@ class MonitoringWindow:
           - pd.to_numeric(..., errors="coerce").dropna() before binning: a
             column that arrived as None must not silently become 0.
         """
-        # TODO: implement
-        raise NotImplementedError
+        if self.reference is None or len(self) < self.min_size:
+            return {}
+
+        frame = self.snapshot()
+        drift: Dict[str, float] = {}
+        for feature in self.reference.features:
+            if feature not in frame.columns:
+                continue
+            values = pd.to_numeric(frame[feature], errors="coerce").dropna().to_numpy()
+            drift[feature] = population_stability_index(
+                values, self.reference.bins[feature], self.reference.expected[feature]
+            )
+        return drift
 
     def compute_fairness(self) -> Dict[str, float]:
         """Selection rate per group: the share sent to review or decline.
@@ -201,8 +231,16 @@ class MonitoringWindow:
             handful of requests swings wildly, and publishing it as a
             fairness signal is worse than saying nothing.
         """
-        # TODO: implement
-        raise NotImplementedError
+        if len(self) < self.min_size:
+            return {}
+
+        frame = self.snapshot()
+        rates: Dict[str, float] = {}
+        for group, rows in frame.groupby("_group"):
+            if len(rows) < MIN_GROUP_SIZE:
+                continue
+            rates[str(group)] = float((rows["_score"] >= self.threshold).mean())
+        return rates
 
     # -------------------------------------------------------------------------
     def publish(self) -> Dict[str, Any]:
@@ -218,8 +256,37 @@ class MonitoringWindow:
             app/schemas.py is the exact shape, and tests/test_api_monitoring.py
             asserts every key.
         """
-        # TODO: implement
-        raise NotImplementedError
+        size = len(self)
+        DRIFT_WINDOW_SIZE.set(size)
+
+        drift = self.compute_drift()
+        # Clear before setting: a feature or group that is no longer reported
+        # (window reset, group fell under MIN_GROUP_SIZE) must disappear from
+        # the exposition, not keep serving its last value as if it were live.
+        FEATURE_DRIFT_PSI.clear()
+        for feature, psi in drift.items():
+            FEATURE_DRIFT_PSI.labels(feature=feature).set(psi)
+        drift_score = max(drift.values()) if drift else 0.0
+        DRIFT_SCORE.set(drift_score)
+
+        rates = self.compute_fairness()
+        SELECTION_RATE.clear()
+        for group, rate in rates.items():
+            SELECTION_RATE.labels(group=group).set(rate)
+        gap = max(rates.values()) - min(rates.values()) if len(rates) >= 2 else 0.0
+        FAIRNESS_GAP.set(gap)
+
+        # Rounded for the JSON only; the gauges above keep full precision.
+        return {
+            "window_size": size,
+            "min_window_size": self.min_size,
+            "sufficient_data": size >= self.min_size,
+            "feature_psi": {f: round(v, 4) for f, v in drift.items()},
+            "drift_score": round(drift_score, 4),
+            "drift_status": drift_status(drift_score),
+            "selection_rate": {g: round(r, 4) for g, r in rates.items()},
+            "fairness_gap": round(gap, 4),
+        }
 
 
 def drift_status(psi: float) -> str:
