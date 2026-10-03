@@ -18,6 +18,12 @@ Three profiles, and the second and third are the point of the whole lab.
                         widens while the aggregate score distribution barely
                         moves.
 
+    --profile defaulted a DATA BUG, not a population shift: an upstream form
+                        fills every applicant's age with the same default.
+                        One feature's PSI explodes while the others stay
+                        flat, which is the signature to check for before
+                        retraining on a drift alert.
+
 Usage:
     python scripts/load_test.py --profile normal  --requests 500
     python scripts/load_test.py --profile drifted --requests 500
@@ -36,7 +42,6 @@ import urllib.request
 from collections import Counter
 from typing import Any, Dict, List
 
-import numpy as np
 import pandas as pd
 
 from pipeline.config import TARGET
@@ -105,6 +110,18 @@ def apply_group_bias(payload: Dict[str, Any], rng: random.Random) -> Dict[str, A
     return payload
 
 
+# The constant an upstream system writes when it has no value. 35 sits inside
+# the training range, so the schema accepts it and only the drift monitor sees it.
+DEFAULT_AGE = 35
+
+
+def apply_default_value(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Overwrite AGE with a constant, as a broken upstream field would."""
+    payload = dict(payload)
+    payload["age"] = DEFAULT_AGE
+    return payload
+
+
 def post(url: str, payload: Dict[str, Any], timeout: float = 10.0):
     """POST one JSON body, returning (status, parsed body, seconds)."""
     body = json.dumps(payload).encode()
@@ -125,7 +142,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--url", default="http://localhost:8000")
     parser.add_argument("--profile", default="normal",
-                        choices=["normal", "drifted", "unfair"])
+                        choices=["normal", "drifted", "unfair", "defaulted"])
     parser.add_argument("--requests", type=int, default=300)
     parser.add_argument("--delay", type=float, default=0.02,
                         help="seconds between requests")
@@ -155,6 +172,8 @@ def main() -> None:
             payload = apply_drift(payload, rng, args.strength)
         elif args.profile == "unfair":
             payload = apply_group_bias(payload, rng)
+        elif args.profile == "defaulted":
+            payload = apply_default_value(payload)
 
         status, body, elapsed = post(f"{args.url}/predict", payload)
         statuses[status] += 1
