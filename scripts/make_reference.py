@@ -60,8 +60,38 @@ def build_reference(frame: pd.DataFrame, n_bins: int = 10) -> dict:
     like LIMIT_BAL put most of the mass in the first bucket, and the PSI then
     barely moves however far the distribution shifts.
     """
-    # TODO: implement
-    raise NotImplementedError
+    quantiles = np.linspace(0.0, 1.0, n_bins + 1)
+    bins: dict = {}
+    expected: dict = {}
+
+    for feature in MONITORED_FEATURES:
+        if feature not in frame.columns:
+            print(f"  {feature:<18} not in the frame, skipped")
+            continue
+        values = pd.to_numeric(frame[feature], errors="coerce").dropna().to_numpy(dtype=float)
+        if values.size == 0:
+            print(f"  {feature:<18} no numeric values, skipped")
+            continue
+
+        # Discrete features (PAY_0, max_delay) repeat quantiles; unique()
+        # collapses them so no bin is zero-width.
+        edges = np.unique(np.quantile(values, quantiles))
+        if len(edges) < 3:
+            print(f"  {feature:<18} only {len(edges)} distinct edges, skipped")
+            continue
+
+        edges[0], edges[-1] = -np.inf, np.inf
+        counts, _ = np.histogram(values, bins=edges)
+        proportions = counts / counts.sum()
+
+        bins[feature] = [float(e) for e in edges]
+        expected[feature] = [float(p) for p in proportions]
+        print(
+            f"  {feature:<18} {len(proportions):>2} bins, "
+            f"smallest {proportions.min():.3f}, largest {proportions.max():.3f}"
+        )
+
+    return {"bins": bins, "expected": expected, "n_bins": n_bins}
 
 
 def main() -> None:
